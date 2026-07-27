@@ -1,0 +1,4 @@
+repository "androidAR/androidAR@16768337084524@cloud"
+  path "/"
+    br "/main"
+    co "/main"

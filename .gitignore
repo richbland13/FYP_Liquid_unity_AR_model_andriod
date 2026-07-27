@@ -1,0 +1,45 @@
+# Unity-generated folders
+[Ll]ibrary/
+[Tt]emp/
+[Oo]bj/
+[Bb]uild/
+[Bb]uilds/
+[Ll]ogs/
+[Uu]ser[Ss]ettings/
+[Mm]emoryCaptures/
+[Rr]ecordings/
+
+# IDE-generated files
+.vs/
+.vscode/
+.idea/
+*.csproj
+*.sln
+*.suo
+*.user
+*.userprefs
+*.pidb
+*.booproj
+*.svd
+*.pdb
+*.mdb
+*.opendb
+*.VC.db
+
+# Operating-system files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Android and Gradle-generated files
+.gradle/
+local.properties
+*.apk
+*.aab
+
+# Vuforia migration backup
+Assets/Editor/Migration/*.tgz
+Assets/Editor/Migration/*.tgz.meta
+
+# Crash reports
+sysinfo.txt
