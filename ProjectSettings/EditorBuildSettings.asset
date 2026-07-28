@@ -5,9 +5,12 @@ EditorBuildSettings:
   m_ObjectHideFlags: 0
   serializedVersion: 2
   m_Scenes:
-  - enabled: 1
+  - enabled: 0
     path: Assets/BeakerARScene.unity
     guid: 850345bb9275f9f44ba11618e1ba15c6
+  - enabled: 1
+    path: Assets/Scenes/BeakerAR_BlenderLiquid.unity
+    guid: cf22603b7dfa3644fa33b460e3fa4057
   m_configObjects:
     com.unity.input.settings.actions: {fileID: -944628639613478452, guid: 289c1b55c9541489481df5cc06664110, type: 3}
   m_UseUCBPForAssetBundles: 0
