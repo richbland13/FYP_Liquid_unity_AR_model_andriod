@@ -11,38 +11,24 @@ public static class CylindricalSloshMath
         9.80665f;
 
     /*
-     * First root of the derivative of the first-order
-     * Bessel function for the fundamental asymmetric
-     * cylindrical slosh mode.
+     * First cylindrical asymmetric slosh-mode root.
      */
     public const float FirstModeRoot =
         1.8411838f;
 
     /*
-     * Effective damping ratio used by the reduced-order
-     * water slosh model.
+     * Effective damping ratio for the reduced-order
+     * small-beaker water model.
      *
-     * This represents the complete simplified system,
-     * including water viscosity, wall interaction and
-     * energy losses omitted by the single-mode model.
+     * This is an effective model value, not a universal
+     * material constant for water.
      */
     public const float WaterDampingRatio =
-        0.08f;
+        0.05f;
 
-    /*
-     * Numerical safety limit rather than a physical
-     * calibration parameter.
-     */
     public const float MaximumSurfaceTiltDegrees =
         80.0f;
 
-    /// <summary>
-    /// Calculates the first-mode natural angular
-    /// frequency in radians per second.
-    ///
-    /// omega² = g*k*tanh(k*h)
-    /// k = 1.841/R
-    /// </summary>
     public static float NaturalAngularFrequency(
         float innerRadius,
         float liquidDepth)
@@ -63,23 +49,22 @@ public static class CylindricalSloshMath
                 waveNumber * safeDepth);
 
         return Mathf.Sqrt(
-            Mathf.Max(omegaSquared, 0.0001f));
+            Mathf.Max(
+                omegaSquared,
+                0.0001f));
     }
 
     public static float NaturalFrequencyHertz(
         float innerRadius,
         float liquidDepth)
     {
-        return NaturalAngularFrequency(
-                   innerRadius,
-                   liquidDepth) /
-               (2.0f * Mathf.PI);
+        return
+            NaturalAngularFrequency(
+                innerRadius,
+                liquidDepth) /
+            (2.0f * Mathf.PI);
     }
 
-    /// <summary>
-    /// Converts an upward-facing liquid surface normal
-    /// into X and Z plane slopes.
-    /// </summary>
     public static Vector2 SurfaceSlopeFromNormal(
         Vector3 surfaceNormal)
     {
@@ -96,7 +81,8 @@ public static class CylindricalSloshMath
             Mathf.Deg2Rad;
 
         float maximumSlope =
-            Mathf.Tan(maximumAngleRadians);
+            Mathf.Tan(
+                maximumAngleRadians);
 
         float safeVertical =
             Mathf.Max(
@@ -120,8 +106,9 @@ public static class CylindricalSloshMath
     public static float SurfaceTiltDegrees(
         Vector2 surfaceSlope)
     {
-        return Mathf.Atan(
-                   surfaceSlope.magnitude) *
-               Mathf.Rad2Deg;
+        return
+            Mathf.Atan(
+                surfaceSlope.magnitude) *
+            Mathf.Rad2Deg;
     }
 }

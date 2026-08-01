@@ -3,17 +3,24 @@ using UnityEngine;
 using UnityEngine.UI;
 
 /// <summary>
-/// Controls the final demonstration UI:
-/// - real-time fill fraction;
-/// - classical/placeholder-neural model switching;
-/// - liquid-state reset;
-/// - spill-risk bar;
-/// - model metadata and geometry protection.
+/// Controls the liquid-model demonstration UI.
+///
+/// Supports:
+/// - real-time fill-fraction adjustment;
+/// - switching between the classical and ONNX estimators;
+/// - fixed geometry and fill-range protection for the ONNX model;
+/// - restoration of the previous classical geometry;
+/// - resetting both estimators;
+/// - live spill-risk display;
+/// - ONNX model status and performance information.
+///
+/// PlaceholderNeuralLiquidEstimator is no longer required.
 /// </summary>
 [DefaultExecutionOrder(400)]
 public sealed class LiquidAppController : MonoBehaviour
 {
     [Header("Model references")]
+
     [SerializeField]
     private BeakerGeometry geometry;
 
@@ -21,7 +28,7 @@ public sealed class LiquidAppController : MonoBehaviour
     private ClassicalLiquidEstimator classicalEstimator;
 
     [SerializeField]
-    private PlaceholderNeuralLiquidEstimator placeholderNeuralEstimator;
+    private OnnxLiquidEstimator onnxEstimator;
 
     [SerializeField]
     private LiquidEstimatorRouter estimatorRouter;
@@ -30,6 +37,7 @@ public sealed class LiquidAppController : MonoBehaviour
     private SpillRiskCalculator spillRiskCalculator;
 
     [Header("Fill controls")]
+
     [SerializeField]
     private Slider fillFractionSlider;
 
@@ -44,7 +52,48 @@ public sealed class LiquidAppController : MonoBehaviour
     [SerializeField]
     private float classicalMaximumFillFraction = 0.90f;
 
+    [Header("ONNX training envelope")]
+
+    [Tooltip(
+        "The internal beaker radius used to train the ONNX model.")]
+    [Min(0.005f)]
+    [SerializeField]
+    private float trainedInnerRadius = 0.032f;
+
+    [Tooltip(
+        "The internal beaker height used to train the ONNX model.")]
+    [Min(0.020f)]
+    [SerializeField]
+    private float trainedInternalHeight = 0.120f;
+
+    [Tooltip(
+        "Minimum fill fraction represented in the ONNX training data.")]
+    [Range(0.05f, 0.95f)]
+    [SerializeField]
+    private float minimumTrainedFillFraction = 0.30f;
+
+    [Tooltip(
+        "Maximum fill fraction represented in the ONNX training data.")]
+    [Range(0.05f, 0.95f)]
+    [SerializeField]
+    private float maximumTrainedFillFraction = 0.80f;
+
+    [Header("ONNX metadata")]
+
+    [SerializeField]
+    private string neuralModelDisplayName =
+        "ONNX test CNN";
+
+    [Min(1)]
+    [SerializeField]
+    private int neuralWindowSamples = 50;
+
+    [Min(1.0f)]
+    [SerializeField]
+    private float neuralInputRateHertz = 50.0f;
+
     [Header("Mode controls")]
+
     [SerializeField]
     private Button classicalButton;
 
@@ -55,6 +104,7 @@ public sealed class LiquidAppController : MonoBehaviour
     private TMP_Text modelInformationText;
 
     [Header("Risk display")]
+
     [SerializeField]
     private Slider riskBar;
 
@@ -65,6 +115,7 @@ public sealed class LiquidAppController : MonoBehaviour
     private TMP_Text riskLabel;
 
     [Header("Risk colours")]
+
     [SerializeField]
     private Color lowRiskColour =
         new Color(0.20f, 0.90f, 0.28f, 1.0f);
@@ -79,6 +130,17 @@ public sealed class LiquidAppController : MonoBehaviour
 
     private bool suppressFillCallback;
 
+    /*
+     * These values store the user's classical configuration
+     * while the ONNX model temporarily applies its fixed
+     * training geometry.
+     */
+    private bool hasSavedClassicalGeometry;
+
+    private float savedClassicalRadius;
+    private float savedClassicalHeight;
+    private float savedClassicalFillFraction;
+
     private void Start()
     {
         if (fillFractionSlider != null)
@@ -89,12 +151,25 @@ public sealed class LiquidAppController : MonoBehaviour
 
         if (classicalButton != null)
         {
-            classicalButton.onClick.AddListener(UseClassicalModel);
+            classicalButton.onClick.AddListener(
+                UseClassicalModel);
         }
 
         if (neuralButton != null)
         {
-            neuralButton.onClick.AddListener(UsePlaceholderNeuralModel);
+            neuralButton.onClick.AddListener(
+                UseOnnxModel);
+        }
+
+        /*
+         * The application should normally begin in classical
+         * mode, so preserve its starting geometry.
+         */
+        if (estimatorRouter != null &&
+            estimatorRouter.Mode ==
+            LiquidEstimatorRouter.EstimatorMode.Classical)
+        {
+            SaveClassicalGeometry();
         }
 
         ConfigureForCurrentMode();
@@ -118,23 +193,39 @@ public sealed class LiquidAppController : MonoBehaviour
 
         if (classicalButton != null)
         {
-            classicalButton.onClick.RemoveListener(UseClassicalModel);
+            classicalButton.onClick.RemoveListener(
+                UseClassicalModel);
         }
 
         if (neuralButton != null)
         {
-            neuralButton.onClick.RemoveListener(UsePlaceholderNeuralModel);
+            neuralButton.onClick.RemoveListener(
+                UseOnnxModel);
         }
     }
 
     public void OnFillFractionChanged(float value)
     {
-        if (suppressFillCallback || geometry == null)
+        if (suppressFillCallback ||
+            geometry == null)
         {
             return;
         }
 
         geometry.SetFillFraction(value);
+
+        /*
+         * Remember live fill changes made while classical mode
+         * is active, so the value is restored after ONNX mode.
+         */
+        if (IsClassicalMode())
+        {
+            savedClassicalFillFraction =
+                geometry.FillFraction;
+
+            hasSavedClassicalGeometry = true;
+        }
+
         ResetLiquidState();
         RefreshFillLabel();
     }
@@ -147,26 +238,50 @@ public sealed class LiquidAppController : MonoBehaviour
         }
 
         estimatorRouter.UseClassicalEstimator();
+
+        RestoreClassicalGeometry();
+
         ConfigureForCurrentMode();
         ResetLiquidState();
         RefreshAllUi();
     }
 
-    public void UsePlaceholderNeuralModel()
+    public void UseOnnxModel()
     {
         if (estimatorRouter == null ||
-            placeholderNeuralEstimator == null)
+            onnxEstimator == null)
         {
-            SetModelInformation("Neural placeholder is not assigned.");
+            SetModelInformation(
+                "<b>ONNX estimator unavailable</b>\n" +
+                "Assign OnnxLiquidEstimator in " +
+                "LiquidAppController.");
+
             return;
         }
 
-        placeholderNeuralEstimator.ApplyTrainedGeometry();
-
-        if (!estimatorRouter.TryUseNeuralEstimator())
+        /*
+         * Capture the current user-selected classical
+         * configuration before overwriting it.
+         */
+        if (IsClassicalMode())
         {
+            SaveClassicalGeometry();
+        }
+
+        ApplyOnnxTrainingGeometry();
+
+        bool switched =
+            estimatorRouter.TryUseNeuralEstimator();
+
+        if (!switched)
+        {
+            RestoreClassicalGeometry();
+
             SetModelInformation(
-                "Neural estimator is not assigned to LiquidEstimatorRouter.");
+                "<b>ONNX estimator unavailable</b>\n" +
+                "Assign OnnxLiquidEstimator as the router's " +
+                "Neural Estimator.");
+
             return;
         }
 
@@ -175,48 +290,182 @@ public sealed class LiquidAppController : MonoBehaviour
         RefreshAllUi();
     }
 
+    /*
+     * Kept as a compatibility alias in case an older Unity
+     * button event was manually connected to this method.
+     */
+    public void UsePlaceholderNeuralModel()
+    {
+        UseOnnxModel();
+    }
+
+    /// <summary>
+    /// Resets both estimator states.
+    ///
+    /// The Reset button can continue calling this method.
+    /// </summary>
     public void ResetLiquidState()
     {
-        classicalEstimator?.ResetEstimator();
-        placeholderNeuralEstimator?.ResetEstimator();
+        if (classicalEstimator != null)
+        {
+            classicalEstimator.ResetEstimator();
+        }
+
+        if (onnxEstimator != null)
+        {
+            onnxEstimator.ResetEstimator();
+        }
+    }
+
+    private void SaveClassicalGeometry()
+    {
+        if (geometry == null)
+        {
+            return;
+        }
+
+        savedClassicalRadius =
+            geometry.InnerRadius;
+
+        savedClassicalHeight =
+            geometry.InternalHeight;
+
+        savedClassicalFillFraction =
+            geometry.FillFraction;
+
+        hasSavedClassicalGeometry = true;
+    }
+
+    private void RestoreClassicalGeometry()
+    {
+        if (geometry == null ||
+            !hasSavedClassicalGeometry)
+        {
+            return;
+        }
+
+        geometry.SetInnerRadius(
+            savedClassicalRadius);
+
+        geometry.SetInternalHeight(
+            savedClassicalHeight);
+
+        geometry.SetFillFraction(
+            Mathf.Clamp(
+                savedClassicalFillFraction,
+                classicalMinimumFillFraction,
+                classicalMaximumFillFraction));
+    }
+
+    private void ApplyOnnxTrainingGeometry()
+    {
+        if (geometry == null)
+        {
+            return;
+        }
+
+        geometry.SetInnerRadius(
+            trainedInnerRadius);
+
+        geometry.SetInternalHeight(
+            trainedInternalHeight);
+
+        geometry.SetFillFraction(
+            Mathf.Clamp(
+                geometry.FillFraction,
+                minimumTrainedFillFraction,
+                maximumTrainedFillFraction));
     }
 
     private void ConfigureForCurrentMode()
     {
-        if (geometry == null || estimatorRouter == null)
+        if (geometry == null ||
+            estimatorRouter == null)
         {
             return;
         }
 
         bool neuralMode =
             estimatorRouter.Mode ==
-            LiquidEstimatorRouter.EstimatorMode.NeuralNetwork;
+            LiquidEstimatorRouter
+                .EstimatorMode.NeuralNetwork;
 
         float minimumFill =
-            neuralMode && placeholderNeuralEstimator != null
-                ? placeholderNeuralEstimator.MinimumTrainedFillFraction
+            neuralMode
+                ? minimumTrainedFillFraction
                 : classicalMinimumFillFraction;
 
         float maximumFill =
-            neuralMode && placeholderNeuralEstimator != null
-                ? placeholderNeuralEstimator.MaximumTrainedFillFraction
+            neuralMode
+                ? maximumTrainedFillFraction
                 : classicalMaximumFillFraction;
 
-        float clampedFill = Mathf.Clamp(
-            geometry.FillFraction,
-            minimumFill,
-            maximumFill);
+        float clampedFill =
+            Mathf.Clamp(
+                geometry.FillFraction,
+                minimumFill,
+                maximumFill);
 
         geometry.SetFillFraction(clampedFill);
 
         if (fillFractionSlider != null)
         {
             suppressFillCallback = true;
-            fillFractionSlider.minValue = minimumFill;
-            fillFractionSlider.maxValue = maximumFill;
-            fillFractionSlider.value = clampedFill;
+
+            fillFractionSlider.minValue =
+                minimumFill;
+
+            fillFractionSlider.maxValue =
+                maximumFill;
+
+            fillFractionSlider.value =
+                clampedFill;
+
             suppressFillCallback = false;
         }
+    }
+
+    private bool IsClassicalMode()
+    {
+        return
+            estimatorRouter != null &&
+            estimatorRouter.Mode ==
+            LiquidEstimatorRouter
+                .EstimatorMode.Classical;
+    }
+
+    private bool OnnxGeometryIsValid()
+    {
+        if (geometry == null)
+        {
+            return false;
+        }
+
+        const float toleranceMetres =
+            0.0001f;
+
+        bool radiusValid =
+            Mathf.Abs(
+                geometry.InnerRadius -
+                trainedInnerRadius) <=
+            toleranceMetres;
+
+        bool heightValid =
+            Mathf.Abs(
+                geometry.InternalHeight -
+                trainedInternalHeight) <=
+            toleranceMetres;
+
+        bool fillValid =
+            geometry.FillFraction >=
+                minimumTrainedFillFraction &&
+            geometry.FillFraction <=
+                maximumTrainedFillFraction;
+
+        return
+            radiusValid &&
+            heightValid &&
+            fillValid;
     }
 
     private void RefreshAllUi()
@@ -229,13 +478,15 @@ public sealed class LiquidAppController : MonoBehaviour
 
     private void RefreshFillLabel()
     {
-        if (fillFractionLabel == null || geometry == null)
+        if (fillFractionLabel == null ||
+            geometry == null)
         {
             return;
         }
 
         fillFractionLabel.text =
-            $"Fill fraction: {geometry.FillFraction:P0}";
+            $"Fill fraction: " +
+            $"{geometry.FillFraction:P0}";
     }
 
     private void UpdateRiskDisplay()
@@ -245,6 +496,9 @@ public sealed class LiquidAppController : MonoBehaviour
             spillRiskCalculator.HasValidResult
                 ? spillRiskCalculator.SpillRiskIndex
                 : 0.0f;
+
+        risk =
+            Mathf.Clamp01(risk);
 
         if (riskBar != null)
         {
@@ -269,7 +523,11 @@ public sealed class LiquidAppController : MonoBehaviour
         }
         else
         {
-            label = risk >= 1.0f ? "RIM REACHED" : "HIGH";
+            label =
+                risk >= 1.0f
+                    ? "RIM REACHED"
+                    : "HIGH";
+
             colour = highRiskColour;
         }
 
@@ -280,51 +538,78 @@ public sealed class LiquidAppController : MonoBehaviour
 
         if (riskLabel != null)
         {
-            riskLabel.text = $"Spill risk: {risk:P0} — {label}";
+            riskLabel.text =
+                $"Spill risk: {risk:P0} — {label}";
+
             riskLabel.color = colour;
         }
     }
 
     private void UpdateModelInformation()
     {
-        if (modelInformationText == null || estimatorRouter == null)
+        if (modelInformationText == null ||
+            estimatorRouter == null)
         {
             return;
         }
 
-        if (estimatorRouter.Mode ==
-            LiquidEstimatorRouter.EstimatorMode.Classical)
+        if (IsClassicalMode())
         {
             SetModelInformation(
                 "<b>Estimator: Classical</b>\n" +
                 "2-axis spring-damper\n" +
                 "Geometry: adjustable\n" +
-                "Input: IMU, Vuforia fallback");
+                "Input: Nicla IMU / Vuforia fallback");
+
             return;
         }
 
-        if (placeholderNeuralEstimator == null)
+        string modelStatus;
+
+        if (onnxEstimator == null)
         {
-            SetModelInformation(
-                "<b>Estimator: Neural</b>\nNo neural estimator assigned");
-            return;
+            modelStatus =
+                "Estimator component not assigned";
+        }
+        else if (!onnxEstimator.ModelLoaded)
+        {
+            modelStatus =
+                "Model not loaded";
+        }
+        else if (!onnxEstimator.HasValidState)
+        {
+            modelStatus =
+                $"Window: " +
+                $"{onnxEstimator.SamplesInWindow}/" +
+                $"{onnxEstimator.RequiredWindowSamples}";
+        }
+        else
+        {
+            modelStatus =
+                $"Running: " +
+                $"{onnxEstimator.LastInferenceMilliseconds:F2} ms";
         }
 
         string geometryStatus =
-            placeholderNeuralEstimator.GeometryMatchesTrainingEnvelope
+            OnnxGeometryIsValid()
                 ? "Geometry: valid"
                 : "Geometry: OUT OF RANGE";
 
+        float windowSeconds =
+            neuralWindowSamples /
+            Mathf.Max(
+                neuralInputRateHertz,
+                1.0f);
+
         SetModelInformation(
-            "<b>Estimator: Neural placeholder</b>\n" +
-            "Not a trained AI model\n" +
-            "Future model: temporal CNN, ONNX\n" +
-            "Window: 1.0 s at 50 Hz\n" +
-            $"R: {placeholderNeuralEstimator.TrainedInnerRadius * 1000.0f:F0} mm, " +
-            $"H: {placeholderNeuralEstimator.TrainedInternalHeight * 1000.0f:F0} mm\n" +
-            $"Fill range: {placeholderNeuralEstimator.MinimumTrainedFillFraction:P0}" +
-            "–" +
-            $"{placeholderNeuralEstimator.MaximumTrainedFillFraction:P0}\n" +
+            $"<b>Estimator: {neuralModelDisplayName}</b>\n" +
+            $"{modelStatus}\n" +
+            $"Window: {windowSeconds:F1} s " +
+            $"at {neuralInputRateHertz:F0} Hz\n" +
+            $"R: {trainedInnerRadius * 1000.0f:F0} mm, " +
+            $"H: {trainedInternalHeight * 1000.0f:F0} mm\n" +
+            $"Fill: {minimumTrainedFillFraction:P0}–" +
+            $"{maximumTrainedFillFraction:P0}\n" +
             geometryStatus);
     }
 
@@ -336,28 +621,43 @@ public sealed class LiquidAppController : MonoBehaviour
         }
 
         bool classicalMode =
-            estimatorRouter.Mode ==
-            LiquidEstimatorRouter.EstimatorMode.Classical;
+            IsClassicalMode();
 
         if (classicalButton != null)
         {
-            classicalButton.interactable = !classicalMode;
+            classicalButton.interactable =
+                !classicalMode;
         }
 
         if (neuralButton != null)
         {
             neuralButton.interactable =
                 classicalMode &&
-                placeholderNeuralEstimator != null &&
+                onnxEstimator != null &&
                 estimatorRouter.NeuralEstimatorAvailable;
         }
     }
 
-    private void SetModelInformation(string message)
+    private void SetModelInformation(
+        string message)
     {
         if (modelInformationText != null)
         {
-            modelInformationText.text = message;
+            modelInformationText.text =
+                message;
         }
+    }
+
+    private void OnValidate()
+    {
+        classicalMaximumFillFraction =
+            Mathf.Max(
+                classicalMinimumFillFraction,
+                classicalMaximumFillFraction);
+
+        maximumTrainedFillFraction =
+            Mathf.Max(
+                minimumTrainedFillFraction,
+                maximumTrainedFillFraction);
     }
 }

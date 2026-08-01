@@ -1,0 +1,14 @@
+fileFormatVersion: 2
+guid: eab57d693511aae449c6e09a96b5e205
+MonoImporter:
+  externalObjects: {}
+  serializedVersion: 2
+  defaultReferences:
+  - modelAsset: {fileID: 5022602860645237092, guid: 376780cbfba4b1c419b15bf82a61ef76, type: 3}
+  - imuMotionProvider: {instanceID: 0}
+  - geometry: {instanceID: 0}
+  executionOrder: 0
+  icon: {instanceID: 0}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
